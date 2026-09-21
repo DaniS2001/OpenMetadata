@@ -37,6 +37,7 @@ import {
   getLoggedInUserPermissions,
   getResourcePermission,
 } from '../../rest/permissionAPI';
+import { Operation } from '../../generated/entity/policies/policy';
 import { setUrlPathnameExpiryAfterRoute } from '../../utils/AuthProvider.util';
 import { PERMISSION_POLICY } from '../../utils/permissionPolicy';
 import {
@@ -60,12 +61,12 @@ export const PermissionContext = createContext<PermissionContextType>(
 );
 
 // Single seam for the resource-level conditionalAllow policy (see
-// permissionPolicy.ts for the full rationale and blast radius). Reads as
-// `false` while the policy stays 'strict', which is byte-for-byte the
-// pre-refactor (base commit 9cf866cd23) behavior — resource-level
-// conditionalAllow counts as denied, matching entity-level gating.
-const RESOURCE_ALLOW_CONDITIONAL =
-  PERMISSION_POLICY.resourceLevelConditionalAllow === 'attempt';
+// permissionPolicy.ts for the full rationale and blast radius). Permits a
+// resource-level conditionalAllow only for the View-class operations the
+// policy allow-lists (the fix for OpenMetadata#31783) — every other
+// operation stays denied, matching entity-level gating byte-for-byte.
+const RESOURCE_ALLOW_CONDITIONAL = (operation: Operation): boolean =>
+  PERMISSION_POLICY.resourceLevelConditionalAllowOperations.has(operation);
 
 /**
  *
@@ -100,11 +101,9 @@ const PermissionProvider: FC<PermissionProviderProps> = ({ children }) => {
   const fetchLoggedInUserPermissions = useCallback(async () => {
     try {
       const response = await getLoggedInUserPermissions();
-      // Behavior parity with base (9cf866cd23): strict translation by
-      // default (RESOURCE_ALLOW_CONDITIONAL is false while the policy stays
-      // 'strict'). Flipping PERMISSION_POLICY.resourceLevelConditionalAllow
-      // to 'attempt' is the fix for OpenMetadata#31783 and ships as its own
-      // PR — see permissionPolicy.ts.
+      // Fix for OpenMetadata#31783: a resource-level conditionalAllow counts
+      // as permitted only for the View-class operations allow-listed in
+      // permissionPolicy.ts — see RESOURCE_ALLOW_CONDITIONAL above.
       setPermissions(
         getUIPermission(response.data || [], RESOURCE_ALLOW_CONDITIONAL)
       );
@@ -157,10 +156,7 @@ const PermissionProvider: FC<PermissionProviderProps> = ({ children }) => {
       queryClient.fetchQuery({
         queryKey: permissionQueryKeys.resource(resource),
         queryFn: async () =>
-          // Behavior parity with base (9cf866cd23): strict translation by
-          // default. Flipping PERMISSION_POLICY.resourceLevelConditionalAllow
-          // to 'attempt' is the fix for OpenMetadata#31783 and ships as its
-          // own PR — see permissionPolicy.ts.
+          // Fix for OpenMetadata#31783 — see RESOURCE_ALLOW_CONDITIONAL above.
           getOperationPermissions(
             await getResourcePermission(resource),
             RESOURCE_ALLOW_CONDITIONAL
