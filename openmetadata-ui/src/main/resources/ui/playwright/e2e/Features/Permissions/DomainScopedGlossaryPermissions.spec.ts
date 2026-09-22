@@ -146,9 +146,20 @@ test.describe('Domain-scoped Glossary Permissions (OpenMetadata#31783)', () => {
     await expect(
       testUserPage.getByTestId('permission-error-placeholder')
     ).not.toBeVisible();
+
+    // Assert the panel's actual list content, not the
+    // `glossary-left-panel-scroller` sentinel: that div is the
+    // IntersectionObserver target for infinite scroll, so it is empty and
+    // `w-full` sets width only - its bounding box is always zero-height and
+    // toBeVisible() can never pass on it. The panel also collapses to zero
+    // width until ResizableLeftPanels measures, so assert attachment (same
+    // reasoning as GlossaryDisplayNameEdit.spec.ts).
     await expect(
-      testUserPage.getByTestId('glossary-left-panel-scroller')
-    ).toBeVisible();
+      testUserPage.getByTestId('glossary-left-panel').getByRole('menuitem', {
+        name: glossary.responseData.displayName,
+        exact: true,
+      })
+    ).toBeAttached();
 
     await testUserPage.goto(
       `/glossary/${encodeURIComponent(
