@@ -12,6 +12,7 @@
  */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { act, forwardRef } from 'react';
+import * as ReactDOM from 'react-dom';
 import { useAirflowStatus } from '../../../../context/AirflowStatusProvider/AirflowStatusProvider';
 import { LOADING_STATE } from '../../../../enums/common.enum';
 import { ServiceCategory } from '../../../../enums/service.enum';
@@ -523,6 +524,22 @@ describe('ServiceConfig', () => {
     await waitFor(() => {
       expect(screen.getByTestId('submit-button')).not.toBeDisabled();
     });
+  });
+
+  it('should commit form data changes synchronously via flushSync so the Test Connection ready state cannot lag a field fill', async () => {
+    const flushSyncSpy = jest.spyOn(ReactDOM, 'flushSync');
+
+    await act(async () => {
+      render(<ConnectionConfigForm {...mockProps} requireTestConnection />);
+    });
+
+    flushSyncSpy.mockClear();
+
+    fireEvent.click(screen.getByTestId('change-edited-form'));
+
+    expect(flushSyncSpy).toHaveBeenCalled();
+
+    flushSyncSpy.mockRestore();
   });
 
   it('should respect the parent submit disabled state', async () => {

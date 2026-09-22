@@ -169,6 +169,20 @@ export const testConnection = async (page: Page) => {
   await expect(readyToTestCard).toBeVisible();
   await expect(testConnectionButton).toBeEnabled();
 
+  // Defensive: the button's enabled state and the form's own validation can
+  // commit on slightly different ticks under CI load, so a button that looks
+  // enabled can still fail validation on click without firing a request.
+  // Confirm no error text is currently rendered before clicking.
+  await expect(async () => {
+    const validationErrorCount = await page
+      .locator(
+        '[slot="errorMessage"]:visible, li[class*="text-error-primary"]:visible'
+      )
+      .count();
+
+    expect(validationErrorCount).toBe(0);
+  }).toPass({ timeout: 5_000 });
+
   let definitionResponse: Response;
   try {
     [definitionResponse] = await Promise.all([

@@ -199,7 +199,11 @@ const ConnectionConfigForm = forwardRef<
       const nextFormData = event.formData ?? {};
 
       currentFormDataRef.current = nextFormData;
-      setCurrentFormData(nextFormData);
+      // flushSync commits this state synchronously so missingRequiredFieldsCount
+      // (and the Test Connection ready state derived from it) never lags behind
+      // what handleRequiredFieldsValidation's flushSync'd RJSF validateForm()
+      // sees on click - see the comment there for the same batching race.
+      flushSync(() => setCurrentFormData(nextFormData));
     };
 
     const customFields: RegistryFieldsType = {
