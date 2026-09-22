@@ -120,9 +120,13 @@ export const deletedUserChecks = async (page: Page) => {
 export const visitUserProfilePage = async (page: Page, userName: string) => {
   await settingClick(page, GlobalSettingOptions.USERS);
 
+  // Scoped to the table's own loading overlay, not the generic "loader"
+  // testid - that one also matches every visible row's per-avatar
+  // ProfilePicture loader, which under strict mode made this locator
+  // resolve to multiple elements once rows rendered.
   const listLoader = page
-    .getByTestId('user-list-v1-component')
-    .getByTestId('loader');
+    .getByTestId('user-list-table')
+    .getByTestId('table-loading-overlay');
   const userRow = page.getByTestId(userName);
 
   await listLoader.waitFor({ state: 'detached' });

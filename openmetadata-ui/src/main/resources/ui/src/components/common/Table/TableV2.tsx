@@ -1771,7 +1771,9 @@ const TableV2 = <T extends object>(
         )}
 
         {isLoading && (
-          <div className="tw:absolute tw:inset-0 tw:z-10 tw:flex tw:items-center tw:justify-center tw:bg-primary/60">
+          <div
+            className="tw:absolute tw:inset-0 tw:z-10 tw:flex tw:items-center tw:justify-center tw:bg-primary/60"
+            data-testid="table-loading-overlay">
             <Loader />
           </div>
         )}
