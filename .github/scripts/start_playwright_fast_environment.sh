@@ -361,6 +361,20 @@ fi
 rm -f "$seed_search_response"
 
 if [[ -n "$ingestion_image_path" ]]; then
+  # Connector targets for the AutoPilot specs (see docker-compose-playwright-fast.yml).
+  # Started first so they boot while Airflow does; readiness and seeding happen
+  # after Airflow is healthy, at the end of this block. schema-registry is started
+  # there too: it needs a healthy Kafka, and waiting for that here would
+  # serialize Airflow's boot behind Kafka's.
+  for connector_image in \
+    "${PW_CONNECTOR_MYSQL_IMAGE:-mysql:8.0.44@sha256:9c3380eac945af0736031b200027f581925927c81e010056214a4bd6b6693714}" \
+    "${PW_CONNECTOR_KAFKA_IMAGE:-confluentinc/cp-kafka:7.6.0}" \
+    "${PW_CONNECTOR_SCHEMA_REGISTRY_IMAGE:-confluentinc/cp-schema-registry:7.6.0}" \
+    "${PW_CONNECTOR_METABASE_IMAGE:-metabase/metabase:v0.52.8}"; do
+    pull_image_with_retry "$connector_image"
+  done
+  docker compose -f "$compose_file" -f "$fast_compose_file" up -d --no-build mysql kafka metabase
+
   PW_AIRFLOW_CONTAINER=openmetadata_ingestion
   export PW_AIRFLOW_CONTAINER
   airflow_seed_container="${PW_AIRFLOW_CONTAINER}_seed"
@@ -421,6 +435,72 @@ if [[ -n "$ingestion_image_path" ]]; then
     echo "Airflow did not become healthy" >&2
     exit 1
   fi
+
+  wait_for_connector_health() {
+    local service=$1 container_id status
+    container_id=$(docker compose -f "$compose_file" -f "$fast_compose_file" ps -a -q "$service")
+    for _ in $(seq 1 90); do
+      status=$(docker inspect "$container_id" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')
+      [[ "$status" == "healthy" ]] && return 0
+      sleep 2
+    done
+    docker logs --tail 200 "$container_id" >&2
+    echo "Connector target $service did not become healthy" >&2
+    exit 1
+  }
+
+  wait_for_connector_http() {
+    local service=$1 url=$2
+    for _ in $(seq 1 120); do
+      curl -fsS "$url" >/dev/null 2>&1 && return 0
+      sleep 2
+    done
+    docker compose -f "$compose_file" -f "$fast_compose_file" logs --tail 200 "$service" >&2
+    echo "Connector target $service did not become ready at $url" >&2
+    exit 1
+  }
+
+  wait_for_connector_health mysql
+  wait_for_connector_health kafka
+  docker compose -f "$compose_file" -f "$fast_compose_file" up -d --no-build schema-registry
+  wait_for_connector_http schema-registry http://127.0.0.1:18081/subjects
+  wait_for_connector_http metabase http://127.0.0.1:13000/api/health
+
+  # The credentials below are fixtures for throwaway containers, and must match
+  # the fork's TEST_MYSQL_* and TEST_METABASE_* secrets (see
+  # openmetadata-ui/.../playwright/CI_SECRETS.md). Grants mirror the restricted
+  # ingestion account in ingestion/tests/cli_e2e_v2/mysql/source.py.
+  docker compose -f "$compose_file" -f "$fast_compose_file" exec -T mysql \
+    mysql -uroot -ppassword <<'SQL'
+CREATE USER IF NOT EXISTS 'openmetadata_user'@'%' IDENTIFIED BY 'openmetadata_password';
+GRANT PROCESS, SHOW_ROUTINE ON *.* TO 'openmetadata_user'@'%';
+GRANT SELECT, SHOW VIEW, EXECUTE ON autopilot_mysql.* TO 'openmetadata_user'@'%';
+CREATE TABLE IF NOT EXISTS autopilot_mysql.orders (
+  id INT PRIMARY KEY,
+  customer VARCHAR(64) NOT NULL,
+  amount DECIMAL(10, 2) NOT NULL
+);
+INSERT IGNORE INTO autopilot_mysql.orders VALUES (1, 'alice', 10.50), (2, 'bob', 20.00), (3, 'carol', 7.25);
+SQL
+
+  docker compose -f "$compose_file" -f "$fast_compose_file" exec -T kafka \
+    kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
+    --topic autopilot_orders --partitions 1 --replication-factor 1 >/dev/null
+
+  metabase_setup_token=$(curl -fsS http://127.0.0.1:13000/api/session/properties | jq -er '."setup-token"')
+  jq -n --arg token "$metabase_setup_token" '{
+      token: $token,
+      user: {
+        email: "admin@openmetadata.org",
+        password: "OpenMetadata_Pw1",
+        first_name: "Playwright",
+        last_name: "AutoPilot",
+        site_name: "OpenMetadata Playwright"
+      },
+      prefs: {site_name: "OpenMetadata Playwright", site_locale: "en", allow_tracking: false}
+    }' |
+    curl -fsS -X POST http://127.0.0.1:13000/api/setup \
+      -H 'Content-Type: application/json' -d @- >/dev/null
 fi
 
 {

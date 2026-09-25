@@ -46,6 +46,107 @@ services:
         max-file: "1"
         compress: "false"
 
+  # Connector targets for the ingestion lane's AutoPilot specs. Upstream points
+  # its TEST_MYSQL_*/TEST_KAFKA_*/TEST_METABASE_* secrets at hosted instances a
+  # fork cannot reach, so these stand in for them. They are addressed by service
+  # name over ometa_network because the connection test and the AutoPilot agents
+  # run inside the ingestion container. start_playwright_fast_environment.sh
+  # starts them on ingestion shards only, and seeds and configures them there.
+  # Images match the ones the ingestion test suites already run.
+  mysql:
+    image: ${PW_CONNECTOR_MYSQL_IMAGE:-mysql:8.0.44@sha256:9c3380eac945af0736031b200027f581925927c81e010056214a4bd6b6693714}
+    restart: "no"
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: autopilot_mysql
+    networks:
+      - local_app_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-ppassword"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "1"
+        compress: "false"
+
+  kafka:
+    image: ${PW_CONNECTOR_KAFKA_IMAGE:-confluentinc/cp-kafka:7.6.0}
+    restart: "no"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    networks:
+      - local_app_net
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 3s
+      timeout: 10s
+      retries: 60
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "1"
+        compress: "false"
+
+  schema-registry:
+    image: ${PW_CONNECTOR_SCHEMA_REGISTRY_IMAGE:-confluentinc/cp-schema-registry:7.6.0}
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_HEAP_OPTS: -Xms128m -Xmx256m
+    # Published so the start script can poll readiness from the runner.
+    ports:
+      - "18081:8081"
+    networks:
+      - local_app_net
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "1"
+        compress: "false"
+
+  metabase:
+    image: ${PW_CONNECTOR_METABASE_IMAGE:-metabase/metabase:v0.52.8}
+    restart: "no"
+    environment:
+      JAVA_OPTS: -Xmx1g
+      MB_ANON_TRACKING_ENABLED: "false"
+    # Published so the start script can poll readiness and run first-time
+    # setup from the runner.
+    ports:
+      - "13000:3000"
+    networks:
+      - local_app_net
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "1"
+        compress: "false"
+
   opensearch:
     image: ${PW_OPENSEARCH_IMAGE:-opensearchproject/opensearch:3.4.0}
     restart: "no"
