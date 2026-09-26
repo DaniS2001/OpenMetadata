@@ -11,6 +11,24 @@ fixture_path=$(realpath "$1")
 distribution_path=$(realpath "$2")
 ingestion_image_path=${3:+$(realpath "$3")}
 workspace_root=${GITHUB_WORKSPACE:-$(pwd)}
+
+# Connector targets for the AutoPilot specs (see docker-compose-playwright-fast.yml).
+# Their images are ~2 GB, so on ingestion shards start pulling them now, in
+# parallel with fixture extraction and stack startup; pulling them serially later
+# pushed startup past the caller's 5-minute limit.
+connector_images=(
+  "${PW_CONNECTOR_MYSQL_IMAGE:-mysql:8.0.44@sha256:9c3380eac945af0736031b200027f581925927c81e010056214a4bd6b6693714}"
+  "${PW_CONNECTOR_KAFKA_IMAGE:-confluentinc/cp-kafka:7.6.0}"
+  "${PW_CONNECTOR_SCHEMA_REGISTRY_IMAGE:-confluentinc/cp-schema-registry:7.6.0}"
+  "${PW_CONNECTOR_METABASE_IMAGE:-metabase/metabase:v0.52.8}"
+)
+connector_pull_pids=()
+if [[ -n "$ingestion_image_path" ]]; then
+  for connector_image in "${connector_images[@]}"; do
+    docker pull --quiet "$connector_image" >/dev/null 2>&1 &
+    connector_pull_pids+=("$!")
+  done
+fi
 runtime_root="/dev/shm/openmetadata-playwright-${GITHUB_RUN_ID:-local}-${PW_SHARD_ID:-local}"
 compose_file="docker/development/docker-compose-postgres.yml"
 fast_compose_file="docker/development/docker-compose-playwright-fast.yml"
@@ -361,16 +379,14 @@ fi
 rm -f "$seed_search_response"
 
 if [[ -n "$ingestion_image_path" ]]; then
-  # Connector targets for the AutoPilot specs (see docker-compose-playwright-fast.yml).
   # Started first so they boot while Airflow does; readiness and seeding happen
   # after Airflow is healthy, at the end of this block. schema-registry is started
   # there too: it needs a healthy Kafka, and waiting for that here would
-  # serialize Airflow's boot behind Kafka's.
-  for connector_image in \
-    "${PW_CONNECTOR_MYSQL_IMAGE:-mysql:8.0.44@sha256:9c3380eac945af0736031b200027f581925927c81e010056214a4bd6b6693714}" \
-    "${PW_CONNECTOR_KAFKA_IMAGE:-confluentinc/cp-kafka:7.6.0}" \
-    "${PW_CONNECTOR_SCHEMA_REGISTRY_IMAGE:-confluentinc/cp-schema-registry:7.6.0}" \
-    "${PW_CONNECTOR_METABASE_IMAGE:-metabase/metabase:v0.52.8}"; do
+  # serialize Airflow's boot behind Kafka's. The background pulls started at the
+  # top of this script have usually finished by now; the retrying pull below
+  # skips images already present, and retries any background pull that failed.
+  wait "${connector_pull_pids[@]}" || true
+  for connector_image in "${connector_images[@]}"; do
     pull_image_with_retry "$connector_image"
   done
   docker compose -f "$compose_file" -f "$fast_compose_file" up -d --no-build mysql kafka metabase
