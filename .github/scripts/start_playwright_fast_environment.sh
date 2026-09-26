@@ -510,17 +510,29 @@ CREATE USER IF NOT EXISTS 'openmetadata_user'@'%' IDENTIFIED BY 'openmetadata_pa
 GRANT PROCESS, SHOW_ROUTINE ON *.* TO 'openmetadata_user'@'%';
 GRANT SELECT, SHOW VIEW, EXECUTE ON autopilot_mysql.* TO 'openmetadata_user'@'%';
 GRANT SELECT ON mysql.general_log TO 'openmetadata_user'@'%';
-CREATE TABLE IF NOT EXISTS autopilot_mysql.orders (
-  id INT PRIMARY KEY,
-  customer VARCHAR(64) NOT NULL,
-  amount DECIMAL(10, 2) NOT NULL
-);
-INSERT IGNORE INTO autopilot_mysql.orders VALUES (1, 'alice', 10.50), (2, 'bob', 20.00), (3, 'carol', 7.25);
+CREATE TABLE IF NOT EXISTS autopilot_mysql.bot_entity (id INT PRIMARY KEY, name VARCHAR(64) NOT NULL);
+CREATE TABLE IF NOT EXISTS autopilot_mysql.alert_entity (id INT PRIMARY KEY, name VARCHAR(64) NOT NULL);
+CREATE TABLE IF NOT EXISTS autopilot_mysql.chart_entity (id INT PRIMARY KEY, name VARCHAR(64) NOT NULL);
+INSERT IGNORE INTO autopilot_mysql.bot_entity VALUES (1, 'ingestion-bot'), (2, 'profiler-bot');
+INSERT IGNORE INTO autopilot_mysql.alert_entity VALUES (1, 'failed-tests'), (2, 'schema-change');
+INSERT IGNORE INTO autopilot_mysql.chart_entity VALUES (1, 'daily-orders'), (2, 'revenue');
 SQL
 
-  docker compose -f "$compose_file" -f "$fast_compose_file" exec -T kafka \
-    kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
-    --topic autopilot_orders --partitions 1 --replication-factor 1 >/dev/null
+  # IngestionLogStreamLive.spec.ts needs a Kafka ingestion that is still running
+  # while it watches the logs. The sink saves topics in bulk batches of 100, and
+  # the connector only polls a topic for sample messages once it is saved, so a
+  # broker with fewer than 100 topics finishes in about a second. Empty topics
+  # make each of those polls block for its full 10s timeout, which is what keeps
+  # the run alive; 500 gives five of them. Created in one batch with the Kafka
+  # client already in the ingestion image, rather than one CLI JVM per topic.
+  docker exec -i "$PW_AIRFLOW_CONTAINER" python - <<'PY'
+from confluent_kafka.admin import AdminClient, NewTopic
+
+admin = AdminClient({"bootstrap.servers": "kafka:9092"})
+topics = [NewTopic(f"playwright_filler_{index:03d}", num_partitions=1, replication_factor=1) for index in range(500)]
+for future in admin.create_topics(topics).values():
+    future.result()
+PY
 
   metabase_setup_token=$(curl -fsS http://127.0.0.1:13000/api/session/properties | jq -er '."setup-token"')
   jq -n --arg token "$metabase_setup_token" '{
