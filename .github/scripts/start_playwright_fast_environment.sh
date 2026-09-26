@@ -501,12 +501,15 @@ if [[ -n "$ingestion_image_path" ]]; then
   # The credentials below are fixtures for throwaway containers, and must match
   # the fork's TEST_MYSQL_* and TEST_METABASE_* secrets (see
   # openmetadata-ui/.../playwright/CI_SECRETS.md). Grants mirror the restricted
-  # ingestion account in ingestion/tests/cli_e2e_v2/mysql/source.py.
+  # ingestion account in ingestion/tests/cli_e2e_v2/mysql/source.py, plus read
+  # access to mysql.general_log: AutoPilot also runs the usage and lineage
+  # agents, which read queries from it, and the cli_e2e_v2 pilot does not.
   docker compose -f "$compose_file" -f "$fast_compose_file" exec -T mysql \
     mysql -uroot -ppassword <<'SQL'
 CREATE USER IF NOT EXISTS 'openmetadata_user'@'%' IDENTIFIED BY 'openmetadata_password';
 GRANT PROCESS, SHOW_ROUTINE ON *.* TO 'openmetadata_user'@'%';
 GRANT SELECT, SHOW VIEW, EXECUTE ON autopilot_mysql.* TO 'openmetadata_user'@'%';
+GRANT SELECT ON mysql.general_log TO 'openmetadata_user'@'%';
 CREATE TABLE IF NOT EXISTS autopilot_mysql.orders (
   id INT PRIMARY KEY,
   customer VARCHAR(64) NOT NULL,
